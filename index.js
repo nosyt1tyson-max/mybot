@@ -535,7 +535,7 @@ client.on("messageCreate", async message => {
     if (cmd === "tts") {
       if (!rest) throw new Error(`Usage: \`${prefix}tts hello bhai kya haal hai\``);
       return handleAction("tts", message.guild.id, message.member, {
-        text: attributedText(message.member, rest), language: "auto"
+        text: rest, language: "auto"
       }, p => message.reply(p));
     }
 
