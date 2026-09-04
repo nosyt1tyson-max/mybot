@@ -2,10 +2,10 @@
   "name": "indian-discord-tts-music-bot",
   "version": "1.0.0",
   "description": "Professional Discord Hindi/English Indian-accent TTS and music bot for Railway.",
-  "main": "src/index.js",
+  "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node index.js"
   },
   "engines": {
     "node": ">=24"

@@ -1,0 +1,1 @@
+FIXED: The bot entrypoint is now at the repository root as index.js. package.json starts `node index.js`, and Dockerfile explicitly copies index.js to /app/index.js. Upload this ZIP contents to the GitHub repository root and redeploy Railway. Do not upload your real DISCORD_TOKEN to GitHub; put it in Railway Variables.
