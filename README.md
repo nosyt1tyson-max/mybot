@@ -162,3 +162,12 @@ Enable **Message Content Intent** for prefix commands.
 - Hindi is selected automatically for common Hinglish sentences.
 - The voice remains a soft, natural Indian female voice.
 - Music controls are kept clean and branded; individual YouTube/source limitations can still affect a track.
+
+
+## V7 Music + 24/7 fixes
+- Music now pipes a fresh yt-dlp audio stream directly into FFmpeg instead of relying on a previously fetched GoogleVideo URL.
+- Multiple YouTube player clients are tried automatically.
+- Current yt-dlp EJS support is enabled in the Railway image.
+- New `!247 on` / `!247 off` and `/247` controls.
+- Set `STAY_VC_CHANNEL_ID` in Railway for automatic 24/7 voice.
+- 24/7 can also be enabled per server with `!247 on` after the channel ID is configured.

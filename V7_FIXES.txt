@@ -1,0 +1,6 @@
+V7 fixes:
+1. Music playback changed to a fresh yt-dlp -> FFmpeg stream pipeline.
+2. YouTube client fallback + EJS runtime retained.
+3. Added !247 on/off and /247.
+4. 24/7 reconnect is per guild and avoids duplicate connections.
+5. TTS code remains unchanged from V6.
