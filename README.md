@@ -1,117 +1,110 @@
-# 🇮🇳 Indian TTS + Music Discord Bot
+# 🇮🇳 Indian TTS + Professional Music Bot — Railway
 
-A Railway-ready Discord bot with:
+## FIXED VERSION 2.0
 
-- 🇮🇳 Hindi neural TTS: `hi-IN-SwaraNeural`
-- 🇮🇳 Indian English neural TTS: `en-IN-NeerjaNeural`
-- 🤖 Auto language selection for Hindi/English
-- 🎵 Music search/playback using yt-dlp + FFmpeg
-- ▶️ Play / pause / resume / skip / stop
-- 📜 Queue
-- 🔊 Volume
-- 🔌 Automatic voice reconnect handling
-- ☁️ Docker-based Railway deployment
-- 🔐 Token stored only in Railway Variables
+This version specifically fixes the voice startup error:
 
-## Commands
+`Cannot find module '@discordjs/opus'`
 
-`/join` — Join your current voice channel.
+The project now includes `@discordjs/opus` and installs the required native build tools in Docker.
 
-`/leave` — Leave and clear everything.
+### Features
 
-`/tts text:<message> language:<auto|hi|en>` — Speak in Indian Hindi/English.
+**TTS**
+- `/tts text:hello language:auto`
+- Hindi India voice: `hi-IN-SwaraNeural`
+- English India voice: `en-IN-NeerjaNeural`
+- Auto detects Devanagari Hindi
+- Prefix: `!tts hello bhai`
 
-`/play query:<song name or URL>` — Search and play music.
+**Music**
+- `/play song`
+- `/pause`
+- `/resume`
+- `/skip`
+- `/stop`
+- `/queue`
+- `/volume`
+- `/join`
+- `/leave`
+- Prefix equivalents
 
-`/pause`
+**Prefix**
+- Default: `!`
+- `/prefix prefix:.`
+- Then: `.play arijit singh`
+- Then: `.tts namaste bhai`
+- Only members with Manage Server can change it.
 
-`/resume`
+## IMPORTANT: Discord Developer Portal
 
-`/skip`
+Because prefix commands read message text, you MUST enable:
 
-`/stop`
+**Developer Portal → Your Application → Bot → Privileged Gateway Intents → Message Content Intent → ON**
 
-`/queue`
-
-`/volume percent:<1-100>`
-
-## 1. Create the Discord bot
-
-1. Open the Discord Developer Portal.
-2. Create an Application.
-3. Open **Bot** and create the bot user.
-4. Copy the bot token once. Do NOT put the real token into GitHub.
-5. Invite the bot using OAuth2 URL Generator.
-6. Select scopes:
-   - `bot`
-   - `applications.commands`
-7. Give it these permissions:
-   - View Channels
-   - Send Messages
-   - Connect
-   - Speak
-
-## 2. GitHub
-
-Upload every file/folder from this project to the root of your GitHub repository.
-
-Do NOT upload `.env`.
-
-## 3. Railway
-
-1. Create a new Railway project.
-2. Choose **Deploy from GitHub repo**.
-3. Select this repository.
-4. Railway will detect the Dockerfile.
-5. Open the service → **Variables**.
-6. Add:
-
-`DISCORD_TOKEN` = your real Discord bot token
-
-Optional:
-
-`GUILD_ID` = your Discord server ID
-
-`BOT_STATUS` = Hindi TTS + Music
-
-If you set GUILD_ID, slash commands are registered specifically to that server and normally appear quickly. If you leave it empty, commands are registered globally.
-
-Do not manually set Railway's PORT; this bot does not need a web server.
-
-## 4. Discord permissions
-
-The bot must be able to:
-- View the voice channel
+Also keep the bot permissions:
+- View Channels
+- Send Messages
 - Connect
 - Speak
 
-For text commands, it needs:
-- View Channel
-- Send Messages
+Scopes when inviting:
+- `bot`
+- `applications.commands`
 
-## Important music note
+## GitHub
 
-Music websites can change their playback restrictions at any time. This project uses yt-dlp and FFmpeg instead of hard-coding a fragile website API. If a particular YouTube track is blocked by the source, the bot will report the playback error in Railway logs.
+Upload these files to the ROOT of the repository:
 
-## Railway stability
+```text
+index.js
+package.json
+Dockerfile
+railway.toml
+.env.example
+.gitignore
+.dockerignore
+README.md
+```
 
-The Dockerfile installs:
+Do NOT upload your real `.env` or Discord token.
+
+## Railway Variables
+
+Add:
+
+```text
+DISCORD_TOKEN=YOUR_REAL_BOT_TOKEN
+GUILD_ID=YOUR_SERVER_ID
+BOT_STATUS=🇮🇳 Hindi TTS • Music
+DEFAULT_PREFIX=!
+```
+
+`GUILD_ID` is recommended for fast slash-command registration.
+
+## Railway
+
+Create Project → Deploy from GitHub Repo → choose repository.
+
+Railway will use the included Dockerfile.
+
+No PORT variable is required because this is a Discord gateway bot, not a web server.
+
+## What the Docker image installs
+
 - Node.js 24
 - FFmpeg
-- Python
-- edge-tts
+- Python 3
 - yt-dlp
+- edge-tts
+- build tools for `@discordjs/opus`
 
-This avoids depending on a system FFmpeg/yt-dlp installation already being present on Railway.
+## Music source note
 
-## Local test
+The bot uses yt-dlp + FFmpeg. A particular video can still be unavailable if the source blocks playback, changes its requirements, or the track is region/age restricted. The bot catches these errors instead of crashing.
 
-Install Docker, then:
+## Prefix note
 
-`docker build -t indian-discord-bot .`
+Prefix settings are stored in memory. They remain active while the Railway process is running, but a full restart/redeploy resets them to `DEFAULT_PREFIX`.
 
-Run with:
-
-`docker run --rm -e DISCORD_TOKEN="YOUR_TOKEN" -e GUILD_ID="YOUR_SERVER_ID" indian-discord-bot`
-
-Never commit your actual token.
+For permanent prefix settings across restarts, add a database later.

@@ -1,10 +1,11 @@
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates \
+    && apt-get install -y --no-install-recommends \
+       ffmpeg python3 python3-pip build-essential ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir --break-system-packages edge-tts yt-dlp
+RUN pip3 install --no-cache-dir --break-system-packages -U "yt-dlp[default]" edge-tts
 
 WORKDIR /app
 
