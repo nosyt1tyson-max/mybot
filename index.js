@@ -31,7 +31,24 @@ const crypto = require("node:crypto");
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const DEFAULT_PREFIX = process.env.DEFAULT_PREFIX || "!";
+const TWENTY_FOUR_SEVEN = String(process.env.TWENTY_FOUR_SEVEN || "false").toLowerCase() === "true";
+const STAY_VC_CHANNEL_ID = process.env.STAY_VC_CHANNEL_ID || "";
 const PREFIXES = new Map();
+
+const TTS_VOICES = {
+  hindi: "hi-IN-SwaraNeural",
+  english: "en-IN-NeerjaNeural",
+  // Soft female Indian voice; sexual/moaning effects are intentionally not used.
+  soft: "en-IN-NeerjaNeural"
+};
+
+function displayName(member) {
+  return member?.displayName || member?.user?.globalName || member?.user?.username || "Someone";
+}
+
+function attributedText(member, text) {
+  return `${displayName(member)} said: ${text}`;
+}
 
 if (!TOKEN) {
   console.error("❌ DISCORD_TOKEN is missing. Add it in Railway > Variables.");
@@ -58,7 +75,8 @@ const slashCommands = [
     .addStringOption(o => o.setName("language").setDescription("Voice language").addChoices(
       { name: "Auto", value: "auto" },
       { name: "Hindi India", value: "hi" },
-      { name: "English India", value: "en" }
+      { name: "English India", value: "en" },
+      { name: "Soft Female India", value: "soft" }
     )),
   new SlashCommandBuilder()
     .setName("play").setDescription("Search and play music.")
@@ -257,9 +275,9 @@ function cleanText(text) {
 }
 
 function voiceFor(language, text) {
-  if (language === "hi") return "hi-IN-SwaraNeural";
-  if (language === "en") return "en-IN-NeerjaNeural";
-  return /[\u0900-\u097F]/.test(text) ? "hi-IN-SwaraNeural" : "en-IN-NeerjaNeural";
+  if (language === "hi") return TTS_VOICES.hindi;
+  if (language === "en" || language === "soft") return TTS_VOICES.soft;
+  return /[\u0900-\u097F]/.test(text) ? TTS_VOICES.hindi : TTS_VOICES.english;
 }
 
 async function ttsFile(text, language) {
@@ -289,8 +307,13 @@ function playFile(guildId, file) {
 
 async function commandHelp(target) {
   const p = getPrefix(target.guildId);
-  const e = embed("🇮🇳 Indian TTS + Music", 
-`**Slash Commands**
+  const e = embed("🇮🇳 INDIAN VOICE • MUSIC", 
+`**Professional Voice & Music System**
+
+🎙️ **Voice attribution:** every TTS message starts with the sender's server name — e.g. **“Tyson said: …”**
+🎧 **Soft female option:** natural Indian female neural voice.
+
+**Slash Commands**
 \`/tts\` — Hindi/English Indian voice
 \`/play\` — Play/search music
 \`/pause\` • \`/resume\` • \`/skip\`
@@ -335,7 +358,8 @@ async function handleAction(name, guildId, member, args, reply) {
     const text = args.text;
     const language = args.language || "auto";
     const { channel, state: st } = connect({ member, guildId });
-    const { file, voice } = await ttsFile(text, language);
+    const spoken = attributedText(member, text);
+    const { file, voice } = await ttsFile(spoken, language);
     try {
       playFile(guildId, file);
       return reply({ embeds: [embed("🗣️ TTS Playing", `**Voice:** \`${voice}\`\n**Channel:** ${channel.name}\n**Text:** ${text.slice(0, 800)}`)] });
@@ -412,6 +436,32 @@ async function handleAction(name, guildId, member, args, reply) {
   throw new Error("Unknown command. Use `/help`.");
 }
 
+
+async function start24x7Voice() {
+  if (!TWENTY_FOUR_SEVEN || !STAY_VC_CHANNEL_ID) return;
+  for (const guild of client.guilds.cache.values()) {
+    const channel = guild.channels.cache.get(STAY_VC_CHANNEL_ID);
+    if (!channel || !channel.isVoiceBased()) continue;
+    try {
+      const state = getState(guild.id);
+      const connection = joinVoiceChannel({
+        channelId: channel.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+        selfDeaf: false
+      });
+      state.connection = connection;
+      connection.subscribe(state.player);
+      connection.on(VoiceConnectionStatus.Disconnected, () => {
+        setTimeout(() => start24x7Voice().catch(console.error), 3000);
+      });
+      console.log(`✅ 24/7 VC connected: ${guild.name} / ${channel.name}`);
+    } catch (e) {
+      console.error("24/7 VC connection failed:", e.message);
+    }
+  }
+}
+
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
@@ -433,6 +483,8 @@ client.once("ready", async () => {
   } catch (e) {
     console.error("❌ Slash command registration failed:", e);
   }
+
+  await start24x7Voice();
 });
 
 client.on("interactionCreate", async interaction => {
@@ -483,7 +535,7 @@ client.on("messageCreate", async message => {
     if (cmd === "tts") {
       if (!rest) throw new Error(`Usage: \`${prefix}tts hello bhai kya haal hai\``);
       return handleAction("tts", message.guild.id, message.member, {
-        text: rest, language: "auto"
+        text: attributedText(message.member, rest), language: "auto"
       }, p => message.reply(p));
     }
 

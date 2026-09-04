@@ -1,4 +1,4 @@
-# 🇮🇳 Indian TTS + Professional Music Bot — Railway
+# 🇮🇳 Indian TTS + Professional Music Bot — Railway V3
 
 ## FIXED VERSION 2.0
 
@@ -15,6 +15,8 @@ The project now includes `@discordjs/opus` and installs the required native buil
 - Hindi India voice: `hi-IN-SwaraNeural`
 - English India voice: `en-IN-NeerjaNeural`
 - Auto detects Devanagari Hindi
+- Every TTS message starts with the Discord server display name, e.g. `Tyson said: ...`
+- Soft natural Indian female voice option
 - Prefix: `!tts hello bhai`
 
 **Music**
@@ -108,3 +110,47 @@ The bot uses yt-dlp + FFmpeg. A particular video can still be unavailable if the
 Prefix settings are stored in memory. They remain active while the Railway process is running, but a full restart/redeploy resets them to `DEFAULT_PREFIX`.
 
 For permanent prefix settings across restarts, add a database later.
+
+
+## V3 — Voice attribution + 24/7 VC
+
+Set these Railway Variables if you want the bot to stay in a specific voice channel:
+
+```text
+TWENTY_FOUR_SEVEN=true
+STAY_VC_CHANNEL_ID=YOUR_VOICE_CHANNEL_ID
+```
+
+The bot will reconnect after a voice disconnect when the process is still running.
+
+### Voice attribution
+
+If Tyson writes:
+
+`hello bhai kya haal hai`
+
+the bot speaks:
+
+`Tyson said: hello bhai kya haal hai`
+
+If Royal writes:
+
+`namaste`
+
+the bot speaks:
+
+`Royal said: namaste`
+
+It uses the member's server display name, so nicknames are respected.
+
+### Soft female voice
+
+Use `/tts` with `Soft Female India` for a natural, soft Indian female neural voice. Sexual/moaning effects are not part of the bot.
+
+### Discord buttons
+
+Discord buttons require interaction handlers; the V3 help panel is branded and the command responses use professional embeds. The core controls remain available as slash/prefix commands so they work reliably.
+
+### Required Discord setting
+
+Enable **Message Content Intent** for prefix commands.
