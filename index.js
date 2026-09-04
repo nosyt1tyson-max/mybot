@@ -9,7 +9,10 @@ const {
   SlashCommandBuilder,
   EmbedBuilder,
   PermissionFlagsBits,
-  ActivityType
+  ActivityType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } = require("discord.js");
 
 const {
@@ -47,7 +50,8 @@ function displayName(member) {
 }
 
 function attributedText(member, text) {
-  return `${displayName(member)} said: ${text}`;
+  const clean = String(text || '').replace(/^\s*[^:]{1,80}\s+said\s*:\s*/i, '').trim();
+  return `${displayName(member)} said: ${clean}`;
 }
 
 if (!TOKEN) {
@@ -109,10 +113,13 @@ function getState(guildId) {
 
     const state = {
       player,
+      ttsPlayer: createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } }),
       items: [],
       current: null,
       volume: 80,
       connection: null,
+      voiceChannelId: null,
+      ttsBusy: false,
       generation: 0
     };
 
@@ -127,6 +134,14 @@ function getState(guildId) {
       console.error("❌ Audio player error:", err);
       state.current = null;
       playNext(guildId).catch(e => console.error("playNext:", e));
+    });
+
+    state.ttsPlayer.on(AudioPlayerStatus.Idle, () => {
+      state.ttsBusy = false;
+    });
+    state.ttsPlayer.on("error", err => {
+      console.error("❌ TTS audio player error:", err);
+      state.ttsBusy = false;
     });
   }
   return states.get(guildId);
@@ -149,18 +164,27 @@ function getVoiceChannel(member) {
 function connect(interactionOrMember) {
   const member = interactionOrMember.member || interactionOrMember;
   const channel = getVoiceChannel(member);
-  const state = getState(interactionOrMember.guildId || member.guild.id);
+  const guildId = interactionOrMember.guildId || member.guild.id;
+  const state = getState(guildId);
 
-  let connection = getVoiceConnection(member.guild.id);
+  let connection = getVoiceConnection(guildId);
+  if (connection && state.voiceChannelId && state.voiceChannelId !== channel.id) {
+    try { connection.destroy(); } catch {}
+    connection = null;
+    state.connection = null;
+  }
+
   if (!connection) {
     connection = joinVoiceChannel({
       channelId: channel.id,
-      guildId: member.guild.id,
+      guildId,
       adapterCreator: member.guild.voiceAdapterCreator,
       selfDeaf: false
     });
+    state.voiceChannelId = channel.id;
 
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      // Do not create a second connection. Reuse this guild's state only.
       try {
         await Promise.race([
           new Promise(resolve => connection.once(VoiceConnectionStatus.Ready, resolve)),
@@ -168,16 +192,20 @@ function connect(interactionOrMember) {
         ]);
       } catch {
         try { connection.destroy(); } catch {}
-        state.connection = null;
+        if (state.connection === connection) state.connection = null;
+        if (state.voiceChannelId === channel.id && TWENTY_FOUR_SEVEN) {
+          setTimeout(() => ensure24x7Guild(guildId).catch(console.error), 3000);
+        }
       }
     });
   }
 
   state.connection = connection;
+  state.voiceChannelId = channel.id;
   connection.subscribe(state.player);
+  connection.subscribe(state.ttsPlayer);
   return { channel, state, connection };
 }
-
 function exec(command, args, timeout = 120000) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { timeout, maxBuffer: 15 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -189,41 +217,34 @@ function exec(command, args, timeout = 120000) {
   });
 }
 
+const YT_CLIENTS = ["web_safari", "web_embedded", "android_vr"];
+
+async function ytExec(args, timeout = 100000) {
+  const common = ["--no-playlist", "--no-warnings", "--js-runtimes", "node", "--remote-components", "ejs:github"];
+  let lastError;
+  for (const client of YT_CLIENTS) {
+    try {
+      return await exec("yt-dlp", [...common, "--extractor-args", `youtube:player_client=${client}`, ...args], timeout);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error("YouTube extraction failed.");
+}
+
 async function mediaInfo(query) {
   const target = /^https?:\/\//i.test(query) ? query : `ytsearch1:${query}`;
-  const out = await exec("yt-dlp", [
-    "--dump-single-json",
-    "--no-playlist",
-    "--skip-download",
-    "--no-warnings",
-    "--extractor-args", "youtube:player_client=android",
-    target
-  ], 100000);
-
+  const out = await ytExec(["--dump-single-json", "--skip-download", target]);
   const data = JSON.parse(out);
   return data.entries?.[0] || data;
 }
 
 async function audioUrl(webpageUrl) {
-  const out = await exec("yt-dlp", [
-    "--dump-single-json",
-    "--no-playlist",
-    "--skip-download",
-    "--no-warnings",
-    "--extractor-args", "youtube:player_client=android",
-    webpageUrl
-  ], 100000);
-
-  const data = JSON.parse(out);
-  const formats = (data.formats || [])
-    .filter(f => f.url && f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none"))
-    .sort((a, b) => (b.abr || 0) - (a.abr || 0));
-
-  if (formats[0]?.url) return formats[0].url;
-  if (data.url) return data.url;
+  const out = await ytExec(["--get-url", "-f", "bestaudio/best", webpageUrl]);
+  const urls = out.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+  if (urls[0]) return urls[0];
   throw new Error("No playable audio stream found.");
 }
-
 function ffmpegAudio(url) {
   return spawn("ffmpeg", [
     "-hide_banner", "-loglevel", "error",
@@ -274,6 +295,30 @@ function cleanText(text) {
   return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
 }
 
+function normalizeHinglish(text) {
+  let s = String(text || '').trim();
+  const map = [
+    [/\b(kya|kia)\b/gi, 'क्या'], [/\b(kyu|kyun)\b/gi, 'क्यों'],
+    [/\b(kaise|kese)\b/gi, 'कैसे'], [/\b(haan|han)\b/gi, 'हाँ'],
+    [/\b(nahi|nai|nahin)\b/gi, 'नहीं'], [/\b(acha|accha)\b/gi, 'अच्छा'],
+    [/\b(bhai|bro)\b/gi, 'भाई'], [/\b(yaar|yar)\b/gi, 'यार'],
+    [/\b(abhi)\b/gi, 'अभी'], [/\b(aisa|aesa)\b/gi, 'ऐसा'],
+    [/\b(aise|ese)\b/gi, 'ऐसे'], [/\b(mera|mere|meri)\b/gi, 'मेरा'],
+    [/\b(tum|tu)\b/gi, 'तुम'], [/\b(aap|apka|aapka|apko|aapko)\b/gi, 'आप'],
+    [/\b(hum|ham)\b/gi, 'हम'], [/\b(karo|kr)\b/gi, 'करो'],
+    [/\b(karna)\b/gi, 'करना'], [/\b(raha)\b/gi, 'रहा'],
+    [/\b(rahi)\b/gi, 'रही'], [/\b(rahe)\b/gi, 'रहे'],
+    [/\b(hai|he)\b/gi, 'है'], [/\b(tha|thaa)\b/gi, 'था'],
+    [/\b(thi|thee)\b/gi, 'थी'], [/\b(bohat|bahut)\b/gi, 'बहुत'],
+    [/\b(mujhe)\b/gi, 'मुझे'], [/\b(tujhe)\b/gi, 'तुझे'],
+    [/\b(yaha|yahan)\b/gi, 'यहाँ'], [/\b(waha|wahan)\b/gi, 'वहाँ'],
+    [/\b(kuch)\b/gi, 'कुछ'], [/\b(sab)\b/gi, 'सब'], [/\b(aur)\b/gi, 'और'],
+    [/\b(phir)\b/gi, 'फिर'], [/\b(bol)\b/gi, 'बोल'], [/\b(samajh)\b/gi, 'समझ']
+  ];
+  for (const [rx, rep] of map) s = s.replace(rx, rep);
+  return s;
+}
+
 function voiceFor(language, text) {
   if (language === "hi") return TTS_VOICES.hindi;
   if (language === "en" || language === "soft") return TTS_VOICES.soft;
@@ -283,12 +328,13 @@ function voiceFor(language, text) {
 async function ttsFile(text, language) {
   text = cleanText(text);
   if (!text) throw new Error("Text is empty.");
-  const voice = voiceFor(language, text);
+  const spokenText = /[\u0900-\u097F]/.test(text) ? text : normalizeHinglish(text);
+  const voice = voiceFor(language, spokenText);
   const file = path.join(os.tmpdir(), `tts-${crypto.randomUUID()}.mp3`);
 
   await exec("edge-tts", [
     "--voice", voice,
-    "--text", text,
+    "--text", spokenText,
     "--write-media", file
   ], 70000);
 
@@ -302,9 +348,19 @@ function playFile(guildId, file) {
   const state = getState(guildId);
   const resource = createAudioResource(file, { inlineVolume: true });
   resource.volume.setVolume(1);
-  state.player.play(resource);
+  state.ttsBusy = true;
+  state.ttsPlayer.play(resource);
 }
 
+function musicButtons(guildId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`music:pause:${guildId}`).setLabel("Pause").setEmoji("⏸️").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`music:resume:${guildId}`).setLabel("Resume").setEmoji("▶️").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`music:skip:${guildId}`).setLabel("Skip").setEmoji("⏭️").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`music:stop:${guildId}`).setLabel("Stop").setEmoji("⏹️").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`music:queue:${guildId}`).setLabel("Queue").setEmoji("📜").setStyle(ButtonStyle.Secondary)
+  );
+}
 async function commandHelp(target) {
   const p = getPrefix(target.guildId);
   const e = embed("🇮🇳 INDIAN VOICE • MUSIC", 
@@ -384,7 +440,7 @@ async function handleAction(name, guildId, member, args, reply) {
     const position = state.items.length + (state.current ? 1 : 0);
     playNext(guildId).catch(console.error);
 
-    return reply({ embeds: [embed("🎵 Added to Queue", `**${info.title || "Unknown"}**\nPosition: **${position}**`)] });
+    return reply({ embeds: [embed("🎵 NOW PLAYING • MUSIC", `**${info.title || "Unknown"}**\nQueue position: **${position}**\n\nUse the controls below for quick playback.`)], components: [musicButtons(guildId)] });
   }
 
   if (name === "pause") {
@@ -437,31 +493,45 @@ async function handleAction(name, guildId, member, args, reply) {
 }
 
 
+async function ensure24x7Guild(guildId) {
+  if (!TWENTY_FOUR_SEVEN || !STAY_VC_CHANNEL_ID) return;
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return;
+  const channel = guild.channels.cache.get(STAY_VC_CHANNEL_ID);
+  if (!channel || !channel.isVoiceBased()) return;
+
+  const state = getState(guild.id);
+  const existing = getVoiceConnection(guild.id);
+  if (existing && state.voiceChannelId === channel.id) {
+    state.connection = existing;
+    existing.subscribe(state.player);
+    existing.subscribe(state.ttsPlayer);
+    return;
+  }
+  if (existing) { try { existing.destroy(); } catch {} }
+
+  const connection = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: guild.id,
+    adapterCreator: guild.voiceAdapterCreator,
+    selfDeaf: false
+  });
+  state.connection = connection;
+  state.voiceChannelId = channel.id;
+  connection.subscribe(state.player);
+  connection.subscribe(state.ttsPlayer);
+  connection.on(VoiceConnectionStatus.Disconnected, () => {
+    setTimeout(() => ensure24x7Guild(guild.id).catch(console.error), 3000);
+  });
+  console.log(`✅ 24/7 VC connected: ${guild.name} / ${channel.name}`);
+}
+
 async function start24x7Voice() {
   if (!TWENTY_FOUR_SEVEN || !STAY_VC_CHANNEL_ID) return;
   for (const guild of client.guilds.cache.values()) {
-    const channel = guild.channels.cache.get(STAY_VC_CHANNEL_ID);
-    if (!channel || !channel.isVoiceBased()) continue;
-    try {
-      const state = getState(guild.id);
-      const connection = joinVoiceChannel({
-        channelId: channel.id,
-        guildId: guild.id,
-        adapterCreator: guild.voiceAdapterCreator,
-        selfDeaf: false
-      });
-      state.connection = connection;
-      connection.subscribe(state.player);
-      connection.on(VoiceConnectionStatus.Disconnected, () => {
-        setTimeout(() => start24x7Voice().catch(console.error), 3000);
-      });
-      console.log(`✅ 24/7 VC connected: ${guild.name} / ${channel.name}`);
-    } catch (e) {
-      console.error("24/7 VC connection failed:", e.message);
-    }
+    await ensure24x7Guild(guild.id);
   }
 }
-
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
@@ -488,7 +558,30 @@ client.once("ready", async () => {
 });
 
 client.on("interactionCreate", async interaction => {
-  if (!interaction.isChatInputCommand() || !interaction.guildId) return;
+  if (!interaction.guildId) return;
+
+  if (interaction.isButton()) {
+    const [kind, action, guildId] = interaction.customId.split(":");
+    if (kind !== "music" || guildId !== interaction.guildId) return;
+    try {
+      const state = getState(guildId);
+      if (action === "pause") state.player.pause();
+      else if (action === "resume") state.player.unpause();
+      else if (action === "skip") state.player.stop();
+      else if (action === "stop") { state.items = []; state.current = null; state.generation++; state.player.stop(true); }
+      else if (action === "queue") {
+        const lines = [];
+        if (state.current) lines.push(`▶️ **Now:** ${state.current.title}`);
+        state.items.slice(0, 10).forEach((x, i) => lines.push(`${i + 1}. ${x.title}`));
+        return interaction.reply({ embeds: [embed("📜 Music Queue", lines.length ? lines.join("\n") : "Queue is empty.")], ephemeral: true });
+      }
+      return interaction.reply({ content: `✅ ${action === "pause" ? "Music paused." : action === "resume" ? "Music resumed." : action === "skip" ? "Skipped." : "Music stopped."}`, ephemeral: true });
+    } catch (e) {
+      return interaction.reply({ content: `❌ ${e.message || "Action failed."}`, ephemeral: true }).catch(() => {});
+    }
+  }
+
+  if (!interaction.isChatInputCommand()) return;
 
   try {
     await interaction.deferReply();
@@ -532,7 +625,7 @@ client.on("messageCreate", async message => {
   try {
     if (cmd === "help") return message.reply({ embeds: [await commandHelp(message)] });
 
-    if (cmd === "tts") {
+    if (cmd === "t" || cmd === "tts") {
       if (!rest) throw new Error(`Usage: \`${prefix}tts hello bhai kya haal hai\``);
       return handleAction("tts", message.guild.id, message.member, {
         text: rest, language: "auto"

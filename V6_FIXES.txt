@@ -1,0 +1,7 @@
+V6 FIXES
+- !t <text> is now the primary TTS prefix command. !tts remains as a compatibility alias.
+- Attribution is sanitized so the speaker name is spoken only once.
+- 24/7 voice connection logic no longer creates duplicate guild connections.
+- YouTube extraction no longer forces the failing android client; it tries web_safari/web_embedded/android_vr and uses modern yt-dlp EJS support.
+- Professional music control buttons: Pause, Resume, Skip, Stop, Queue.
+- Hinglish normalization for common Roman-Hindi phrases.
