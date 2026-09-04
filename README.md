@@ -154,3 +154,11 @@ Discord buttons require interaction handlers; the V3 help panel is branded and t
 ### Required Discord setting
 
 Enable **Message Content Intent** for prefix commands.
+
+
+## V4 voice + music polish
+- TTS attribution is generated in one place, so it says `Name said:` only once.
+- Common Roman-Hindi/Hinglish words are normalized to Devanagari before Hindi TTS.
+- Hindi is selected automatically for common Hinglish sentences.
+- The voice remains a soft, natural Indian female voice.
+- Music controls are kept clean and branded; individual YouTube/source limitations can still affect a track.
