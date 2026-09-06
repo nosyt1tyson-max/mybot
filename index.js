@@ -229,18 +229,44 @@ function exec(command, args, timeout = 120000) {
   });
 }
 
+
+// ---------------- MUSIC ENGINE ----------------
+// Primary: direct JioSaavn native API via maintained client.
+// Fallbacks: public JioSaavn API proxies.
+// We never display NOW PLAYING until a real audio file has been downloaded.
+let saavnClientPromise = null;
+
+async function getSaavnClient() {
+  if (!saavnClientPromise) {
+    saavnClientPromise = import("jiosaavn-api-client").then(mod => {
+      const Client = mod.JioSaavnClient || mod.default?.JioSaavnClient;
+      if (!Client) throw new Error("JioSaavn client module did not expose JioSaavnClient.");
+      return new Client({
+        baseUrl: "https://www.jiosaavn.com/api.php",
+        timeoutMs: 12000
+      });
+    });
+  }
+  return saavnClientPromise;
+}
+
 const MUSIC_APIS = [
-  "https://saavn.dev/api/search/songs",
-  "https://saavnapi-nine.vercel.app/result"
+  "https://jiosaavn-api-privatecvc2.vercel.app/result/",
+  "https://saavnapi-nine.vercel.app/result/",
+  "https://saavn.dev/api/search/songs"
 ];
 
-async function fetchJson(url, timeoutMs = 25000) {
+async function fetchJson(url, timeoutMs = 18000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const r = await fetch(url, {
       signal: controller.signal,
-      headers: { "User-Agent": "Indian-Discord-Music-Bot/11.0" }
+      headers: {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+        "Accept": "application/json,text/plain,*/*",
+        "Referer": "https://www.jiosaavn.com/"
+      }
     });
     if (!r.ok) throw new Error(`Music API HTTP ${r.status}`);
     return await r.json();
@@ -249,26 +275,71 @@ async function fetchJson(url, timeoutMs = 25000) {
   }
 }
 
-function pickSaavnSong(data) {
-  const results = data?.data?.results || data?.results || data?.data || [];
-  const list = Array.isArray(results) ? results : [];
-  if (!list.length) return null;
-  const s = list[0];
-  const downloads = Array.isArray(s.downloadUrl) ? s.downloadUrl : [];
-  const best = [...downloads].reverse().find(x => x?.url);
-  const artist = s.artists?.primary?.map(a => a.name).join(", ") || s.primaryArtists || s.artist || "Unknown Artist";
+function bitrateValue(x) {
+  const n = Number(String(x?.bitrate ?? x?.quality ?? "").replace(/\D/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeSong(s, sourceName = "JioSaavn") {
+  if (!s) return null;
+  const rawLinks = [
+    ...(Array.isArray(s.downloadLinks) ? s.downloadLinks : []),
+    ...(Array.isArray(s.downloadUrl) ? s.downloadUrl : []),
+  ].filter(x => x?.url);
+
+  const links = rawLinks
+    .map(x => ({ url: x.url, bitrate: bitrateValue(x) }))
+    .sort((a, b) => b.bitrate - a.bitrate);
+
+  const artist =
+    s.artists?.primary?.map(a => a.name).filter(Boolean).join(", ") ||
+    s.primaryArtists ||
+    s.artist ||
+    s.subtitle ||
+    "Unknown Artist";
+
+  const images = Array.isArray(s.images) ? s.images : [];
+  const legacyImage = Array.isArray(s.image) ? s.image.at(-1)?.url : (typeof s.image === "string" ? s.image : null);
+
   return {
-    title: s.name || s.title || "Unknown",
+    id: s.id || s.songId || s.e_songid || null,
+    title: s.title || s.name || s.song || "Unknown",
     artist,
-    duration: Number(s.duration || 0),
-    image: s.image?.at?.(-1)?.url || s.image_url || s.image || null,
-    audioUrl: best?.url || (typeof s.url === "string" && /\.(mp3|m4a|aac|mp4)(\?|$)/i.test(s.url) ? s.url : null),
+    duration: Number(s.durationSeconds || s.duration || 0),
+    image: images.at(-1)?.url || s.image_url || legacyImage || null,
+    audioUrls: links.map(x => x.url),
+    audioUrl: links[0]?.url || s.media_url || s.url || null,
     webpageUrl: s.url || s.perma_url || null,
-    source: "JioSaavn"
+    source: sourceName
   };
 }
 
-async function searchSaavn(query) {
+async function searchSaavnNative(query) {
+  const client = await getSaavnClient();
+  const result = await client.searchSongs({ query, limit: 5, page: 0 });
+  if (!result?.success) throw new Error(result?.message || "Native JioSaavn search failed.");
+  const first = result.data?.results?.[0];
+  if (!first?.id) throw new Error("Native JioSaavn search returned no song.");
+
+  const full = await client.getSongsById({ ids: [first.id] });
+  if (!full?.success) throw new Error(full?.message || "Could not fetch full song details.");
+  const song = normalizeSong(full.data?.[0], "JioSaavn Native");
+  if (!song?.audioUrl) throw new Error("Native JioSaavn returned no playable audio URL.");
+  return song;
+}
+
+function pickProxySongs(data) {
+  const raw =
+    data?.data?.results ||
+    data?.data?.data ||
+    data?.results ||
+    data?.data ||
+    data?.songs ||
+    [];
+  return Array.isArray(raw) ? raw : [];
+}
+
+async function searchSaavnProxy(query) {
   const encoded = encodeURIComponent(query);
   let last;
   for (const base of MUSIC_APIS) {
@@ -276,28 +347,48 @@ async function searchSaavn(query) {
       const separator = base.includes("?") ? "&" : "?";
       const key = base.includes("saavn.dev") ? "query" : "query";
       const data = await fetchJson(`${base}${separator}${key}=${encoded}`);
-      const song = pickSaavnSong(data);
-      if (song?.audioUrl) return song;
+      const list = pickProxySongs(data);
+      for (const raw of list.slice(0, 5)) {
+        const song = normalizeSong(raw, "JioSaavn Fallback");
+        if (song?.audioUrl) return song;
+      }
+      throw new Error("No playable result from this API.");
     } catch (e) {
       last = e;
-      console.error(`⚠️ Music API failed (${base}):`, e.message);
+      console.error(`⚠️ Music fallback failed (${base}): ${e.message}`);
     }
   }
-  throw last || new Error("No playable result was found.");
+  throw last || new Error("No playable music result found.");
+}
+
+async function searchSaavn(query) {
+  let nativeError;
+  try {
+    return await searchSaavnNative(query);
+  } catch (e) {
+    nativeError = e;
+    console.error(`⚠️ Native JioSaavn failed: ${e.message}`);
+  }
+  try {
+    return await searchSaavnProxy(query);
+  } catch (e) {
+    throw new Error(`Music search failed. Native: ${nativeError?.message || "unknown"} | Fallback: ${e.message}`);
+  }
 }
 
 async function downloadRemoteAudio(url, title) {
   if (!/^https?:\/\//i.test(url)) throw new Error("Invalid audio URL.");
   const safe = String(title || "track").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 70) || "track";
-  const file = path.join(os.tmpdir(), `discord-music-${crypto.randomUUID()}-${safe}.mp3`);
+  const file = path.join(os.tmpdir(), `discord-music-${crypto.randomUUID()}-${safe}.audio`);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 180000);
   try {
     const r = await fetch(url, {
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-        "Accept": "audio/mpeg,audio/*;q=0.9,*/*;q=0.8"
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+        "Accept": "audio/*,*/*;q=0.8",
+        "Referer": "https://www.jiosaavn.com/"
       }
     });
     if (!r.ok || !r.body) throw new Error(`Audio CDN HTTP ${r.status}`);
@@ -307,9 +398,8 @@ async function downloadRemoteAudio(url, title) {
       fh.on("finish", resolve);
       Readable.fromWeb(r.body).on("error", reject).pipe(fh);
     });
-    if (!fs.existsSync(file) || fs.statSync(file).size < 10000) {
-      throw new Error("Music CDN returned an empty/invalid audio file.");
-    }
+    const size = fs.existsSync(file) ? fs.statSync(file).size : 0;
+    if (size < 10000) throw new Error(`Audio CDN returned only ${size} bytes.`);
     return file;
   } catch (e) {
     fs.rmSync(file, { force: true });
@@ -319,56 +409,22 @@ async function downloadRemoteAudio(url, title) {
   }
 }
 
-async function mediaInfo(query) {
-  const song = await searchSaavn(query);
-  return song;
-}
-
 async function downloadAudio(song) {
-  return downloadRemoteAudio(song.audioUrl, song.title);
+  const urls = [...new Set([...(song.audioUrls || []), song.audioUrl].filter(Boolean))];
+  let last;
+  for (const url of urls) {
+    try {
+      return await downloadRemoteAudio(url, song.title);
+    } catch (e) {
+      last = e;
+      console.error(`⚠️ Audio URL failed: ${e.message}`);
+    }
+  }
+  throw last || new Error("No downloadable audio URL.");
 }
 
-async function playNext(guildId, statusMessage = null, requestedTitle = null) {
-  const state = getState(guildId);
-  if (state.current || !state.items.length) return;
-
-  const item = state.items.shift();
-  state.current = item;
-  const generation = state.generation;
-
-  try {
-    console.log(`🎵 Preparing JioSaavn audio: ${item.title}`);
-    const file = await downloadAudio(item);
-    if (generation !== state.generation) {
-      fs.rmSync(file, { force: true });
-      state.current = null;
-      return;
-    }
-
-    item.file = file;
-    const resource = createAudioResource(file, { inlineVolume: true, inputType: StreamType.Arbitrary });
-    resource.volume.setVolume(state.volume / 100);
-    state.player.play(resource);
-    console.log(`▶️ REAL MUSIC STARTED: ${item.title} | file=${file}`);
-
-    if (statusMessage) {
-      await statusMessage.edit({
-        embeds: [embed("🎵 NOW PLAYING • MUSIC", `**${item.title}**\n👤 **${item.artist || "Unknown Artist"}**\n\n🔊 **Source:** JioSaavn\n▶️ **Audio has been submitted to Discord VC.**`)],
-        components: [musicButtons(guildId)]
-      }).catch(() => {});
-    }
-  } catch (e) {
-    console.error("❌ Music playback failed:", e.stack || e.message);
-    state.current = null;
-    if (statusMessage) {
-      const raw = String(e.message || e).replace(/\s+/g, " ").slice(0, 1000);
-      await statusMessage.edit({
-        embeds: [embed("❌ MUSIC FAILED", `**${requestedTitle || item.title}**\n\n${raw}\n\nI did not mark this as Now Playing because audio was not downloaded successfully.`)],
-        components: []
-      }).catch(() => {});
-    }
-    if (state.items.length) setTimeout(() => playNext(guildId), 500);
-  }
+async function mediaInfo(query) {
+  return searchSaavn(query);
 }
 
 function cleanText(text) {
@@ -517,6 +573,7 @@ async function handleAction(name, guildId, member, args, reply) {
     state.items.push({
       title: info.title || "Unknown",
       audioUrl: info.audioUrl,
+      audioUrls: info.audioUrls || [info.audioUrl],
       webpageUrl: info.webpageUrl,
       artist: info.artist,
       duration: info.duration || 0,

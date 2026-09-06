@@ -1,0 +1,9 @@
+V13 MUSIC FIX
+- Inspected V12 uploaded by user.
+- Replaced fragile public-API-only search with native JioSaavn client first.
+- Added multiple fallback API endpoints.
+- Added multiple audio bitrate URL attempts.
+- Added JioSaavn Referer/User-Agent headers.
+- NOW PLAYING is only shown after a real audio file is downloaded.
+- Preserved TTS, Hinglish, professional controls and 24/7.
+- Added jiosaavn-api-client dependency.
