@@ -171,3 +171,31 @@ Enable **Message Content Intent** for prefix commands.
 - New `!247 on` / `!247 off` and `/247` controls.
 - Set `STAY_VC_CHANNEL_ID` in Railway for automatic 24/7 voice.
 - 24/7 can also be enabled per server with `!247 on` after the channel ID is configured.
+
+
+## V8 music + 24/7 setup
+
+### Music
+Use:
+- `/play song name`
+- `!play song name`
+
+This version downloads the audio through yt-dlp, converts it to MP3, then gives the local file to Discord voice. It also includes a PO-token provider for current YouTube restrictions.
+
+### 24/7 Voice
+Option A — command:
+- `!247 on VOICE_CHANNEL_ID`
+- `!247 off`
+- `/247 enabled:true channel:<voice channel>`
+
+Option B — Railway Variables:
+- `TWENTY_FOUR_SEVEN=true`
+- `STAY_VC_CHANNEL_ID=<voice channel ID>`
+
+Then redeploy. The bot will auto-join and reconnect.
+
+### TTS
+- `!t hello bhai`
+- `/tts`
+
+The TTS attribution remains `ServerName said: text`.

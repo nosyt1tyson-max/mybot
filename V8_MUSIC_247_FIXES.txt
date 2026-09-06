@@ -1,0 +1,12 @@
+V8 MUSIC + 24/7 FIX
+
+1. Music playback changed from live URL piping to yt-dlp download -> local MP3 -> Discord AudioResource. This avoids expired/unstable stream URLs.
+2. Added bgutil PO-token provider inside the Railway Docker image for current YouTube anti-bot/PO-token restrictions.
+3. Added mweb/tv/android_vr/web_embedded extraction fallback.
+4. Added real /247 enabled:true channel:<voice channel> command.
+5. Added !247 on [voice-channel-id] and !247 off.
+6. 24/7 reconnects automatically after voice disconnects.
+7. Fixed duplicate interactionCreate listener.
+8. Music temp files are cleaned after playback/stop.
+
+Important: YouTube can still block specific videos or IPs. The bot now has the current yt-dlp PO-token path and multiple fallbacks, but no third-party downloader can guarantee every YouTube URL forever.

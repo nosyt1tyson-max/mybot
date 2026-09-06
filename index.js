@@ -96,6 +96,11 @@ const slashCommands = [
   new SlashCommandBuilder()
     .setName("prefix").setDescription("Set this server's prefix.")
     .addStringOption(o => o.setName("prefix").setDescription("1-3 characters, e.g. ! or .").setRequired(true).setMaxLength(3))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder()
+    .setName("247").setDescription("Keep the bot connected to a voice channel 24/7.")
+    .addBooleanOption(o => o.setName("enabled").setDescription("Enable or disable 24/7 voice.").setRequired(true))
+    .addChannelOption(o => o.setName("channel").setDescription("Voice channel to stay in (optional when enabling)."))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(c => c.toJSON());
 
@@ -120,19 +125,25 @@ function getState(guildId) {
       connection: null,
       voiceChannelId: null,
       ttsBusy: false,
-      generation: 0
+      generation: 0,
+      auto247: false,
+      auto247ChannelId: null
     };
 
     states.set(guildId, state);
 
     player.on(AudioPlayerStatus.Idle, () => {
+      const old = state.current;
       state.current = null;
+      if (old?.file) fs.rmSync(old.file, { force: true });
       playNext(guildId).catch(e => console.error("playNext:", e));
     });
 
     player.on("error", err => {
       console.error("❌ Audio player error:", err);
+      const old = state.current;
       state.current = null;
+      if (old?.file) fs.rmSync(old.file, { force: true });
       playNext(guildId).catch(e => console.error("playNext:", e));
     });
 
@@ -217,16 +228,28 @@ function exec(command, args, timeout = 120000) {
   });
 }
 
-const YT_CLIENTS = ["web_safari", "web_embedded", "android_vr"];
+const YT_CLIENTS = ["mweb", "tv", "android_vr", "web_embedded"];
+const POT_URL = process.env.YTDLP_POT_URL || "http://127.0.0.1:4416";
 
-async function ytExec(args, timeout = 100000) {
-  const common = ["--no-playlist", "--no-warnings", "--js-runtimes", "node", "--remote-components", "ejs:github"];
+async function ytExec(args, timeout = 120000) {
+  const common = [
+    "--no-playlist",
+    "--no-warnings",
+    "--js-runtimes", "node",
+    "--remote-components", "ejs:github",
+    "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_URL}`
+  ];
   let lastError;
   for (const client of YT_CLIENTS) {
     try {
-      return await exec("yt-dlp", [...common, "--extractor-args", `youtube:player_client=${client}`, ...args], timeout);
+      return await exec("yt-dlp", [
+        ...common,
+        "--extractor-args", `youtube:player_client=${client}`,
+        ...args
+      ], timeout);
     } catch (e) {
       lastError = e;
+      console.error(`⚠️ yt-dlp ${client} failed: ${(e.stderr || e.message || "").toString().slice(-1200)}`);
     }
   }
   throw lastError || new Error("YouTube extraction failed.");
@@ -239,25 +262,27 @@ async function mediaInfo(query) {
   return data.entries?.[0] || data;
 }
 
-async function audioUrl(webpageUrl) {
-  const out = await ytExec(["--get-url", "-f", "bestaudio/best", webpageUrl]);
-  const urls = out.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-  if (urls[0]) return urls[0];
-  throw new Error("No playable audio stream found.");
-}
-function ffmpegAudio(url) {
-  return spawn("ffmpeg", [
-    "-hide_banner", "-loglevel", "error",
-    "-reconnect", "1",
-    "-reconnect_streamed", "1",
-    "-reconnect_delay_max", "5",
-    "-i", url,
-    "-vn",
-    "-ac", "2",
-    "-ar", "48000",
-    "-f", "s16le",
-    "pipe:1"
-  ], { stdio: ["ignore", "pipe", "pipe"] });
+async function downloadAudio(webpageUrl, title) {
+  const safe = String(title || "track").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 70) || "track";
+  const base = path.join(os.tmpdir(), `discord-music-${crypto.randomUUID()}-${safe}`);
+  const output = `${base}.%(ext)s`;
+  const out = await ytExec([
+    "--format", "bestaudio/best",
+    "--extract-audio",
+    "--audio-format", "mp3",
+    "--audio-quality", "0",
+    "--output", output,
+    webpageUrl
+  ], 240000);
+
+  const candidates = [
+    `${base}.mp3`,
+    ...fs.readdirSync(os.tmpdir()).filter(f => f.startsWith(path.basename(base) + "."))
+      .map(f => path.join(os.tmpdir(), f))
+  ];
+  const file = candidates.find(f => fs.existsSync(f) && fs.statSync(f).size > 10000);
+  if (!file) throw new Error(`Audio file was not created. ${out.slice(-500)}`);
+  return file;
 }
 
 async function playNext(guildId) {
@@ -269,28 +294,25 @@ async function playNext(guildId) {
   const generation = state.generation;
 
   try {
-    const url = await audioUrl(item.webpage_url);
-    if (generation !== state.generation) return;
+    console.log(`🎵 Preparing: ${item.title}`);
+    const file = await downloadAudio(item.webpage_url, item.title);
+    if (generation !== state.generation) {
+      fs.rmSync(file, { force: true });
+      state.current = null;
+      return;
+    }
 
-    const ff = ffmpegAudio(url);
-    ff.stderr.on("data", d => {
-      const s = d.toString().trim();
-      if (s) console.error("ffmpeg:", s);
-    });
-
-    const resource = createAudioResource(ff.stdout, {
-      inputType: StreamType.Raw,
-      inlineVolume: true
-    });
+    item.file = file;
+    const resource = createAudioResource(file, { inlineVolume: true });
     resource.volume.setVolume(state.volume / 100);
     state.player.play(resource);
+    console.log(`▶️ Music playing: ${item.title}`);
   } catch (e) {
     console.error("❌ Music stream failed:", e.message);
     state.current = null;
-    setTimeout(() => playNext(guildId), 200);
+    setTimeout(() => playNext(guildId), 500);
   }
 }
-
 function cleanText(text) {
   return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
 }
@@ -378,12 +400,13 @@ async function commandHelp(target) {
 \`/prefix\` — Change server prefix
 
 **Prefix Commands**
-\`${p}tts <text>\`
+\`${p}t <text>\`
 \`${p}play <song>\`
 \`${p}pause\` • \`${p}resume\` • \`${p}skip\`
 \`${p}stop\` • \`${p}queue\`
 \`${p}join\` • \`${p}leave\`
 \`${p}help\`
+\`${p}247 on/off\` — 24/7 voice (Manage Server)
 
 **Indian voices:** Hindi India + English India`);
   return e;
@@ -404,6 +427,7 @@ async function handleAction(name, guildId, member, args, reply) {
     state.current = null;
     state.generation++;
     state.player.stop(true);
+    if (state.current?.file) fs.rmSync(state.current.file, { force: true });
     const c = getVoiceConnection(guildId);
     if (c) c.destroy();
     state.connection = null;
@@ -463,6 +487,7 @@ async function handleAction(name, guildId, member, args, reply) {
     state.current = null;
     state.generation++;
     state.player.stop(true);
+    if (state.current?.file) fs.rmSync(state.current.file, { force: true });
     return reply({ embeds: [embed("⏹️ Stopped", "Music stopped and queue cleared.")] });
   }
 
@@ -479,6 +504,27 @@ async function handleAction(name, guildId, member, args, reply) {
     return reply({ embeds: [embed("🔊 Volume", `Volume set to **${n}%**.`)] });
   }
 
+  if (name === "247") {
+    if (!member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+      throw new Error("You need **Manage Server** permission to change 24/7 mode.");
+    }
+    const enabled = Boolean(args.enabled);
+    const requested = args.channelId || STAY_VC_CHANNEL_ID || null;
+    if (!enabled) {
+      state.auto247 = false;
+      state.auto247ChannelId = null;
+      return reply({ embeds: [embed("🛑 24/7 Voice Disabled", "The bot will no longer auto-reconnect to a voice channel.")] });
+    }
+    const channelId = requested;
+    if (!channelId) throw new Error("Select a voice channel, or set STAY_VC_CHANNEL_ID in Railway Variables.");
+    const channel = messageChannel(guildId, channelId);
+    if (!channel || !channel.isVoiceBased()) throw new Error("That channel is not a voice channel.");
+    state.auto247 = true;
+    state.auto247ChannelId = channel.id;
+    await ensure24x7Guild(guildId, channel.id);
+    return reply({ embeds: [embed("✅ 24/7 Voice Enabled", `I will stay connected to **${channel.name}** and reconnect if disconnected.`)] });
+  }
+
   if (name === "prefix") {
     if (!member.permissions.has(PermissionFlagsBits.ManageGuild)) {
       throw new Error("You need **Manage Server** permission to change the prefix.");
@@ -493,15 +539,25 @@ async function handleAction(name, guildId, member, args, reply) {
 }
 
 
-async function ensure24x7Guild(guildId) {
-  if (!TWENTY_FOUR_SEVEN || !STAY_VC_CHANNEL_ID) return;
+function messageChannel(guildId, channelId) {
+  const guild = client.guilds.cache.get(guildId);
+  return guild?.channels?.cache?.get(channelId) || null;
+}
+
+
+async function ensure24x7Guild(guildId, overrideChannelId = null) {
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
-  const channel = guild.channels.cache.get(STAY_VC_CHANNEL_ID);
-  if (!channel || !channel.isVoiceBased()) return;
+  const state = getState(guildId);
+  const channelId = overrideChannelId || state.auto247ChannelId || (TWENTY_FOUR_SEVEN ? STAY_VC_CHANNEL_ID : "");
+  if (!channelId || (!state.auto247 && !TWENTY_FOUR_SEVEN)) return;
+  const channel = guild.channels.cache.get(channelId);
+  if (!channel || !channel.isVoiceBased()) {
+    console.error(`❌ 24/7 channel not found or not voice: ${channelId}`);
+    return;
+  }
 
-  const state = getState(guild.id);
-  const existing = getVoiceConnection(guild.id);
+  const existing = getVoiceConnection(guildId);
   if (existing && state.voiceChannelId === channel.id) {
     state.connection = existing;
     existing.subscribe(state.player);
@@ -518,17 +574,30 @@ async function ensure24x7Guild(guildId) {
   });
   state.connection = connection;
   state.voiceChannelId = channel.id;
+  state.auto247ChannelId = channel.id;
   connection.subscribe(state.player);
   connection.subscribe(state.ttsPlayer);
-  connection.on(VoiceConnectionStatus.Disconnected, () => {
-    setTimeout(() => ensure24x7Guild(guild.id).catch(console.error), 3000);
+  connection.on(VoiceConnectionStatus.Disconnected, async () => {
+    try {
+      await Promise.race([
+        new Promise(resolve => connection.once(VoiceConnectionStatus.Ready, resolve)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("voice reconnect timeout")), 7000))
+      ]);
+    } catch {
+      try { connection.destroy(); } catch {}
+      setTimeout(() => ensure24x7Guild(guildId, channel.id).catch(console.error), 3000);
+    }
   });
   console.log(`✅ 24/7 VC connected: ${guild.name} / ${channel.name}`);
 }
 
 async function start24x7Voice() {
-  if (!TWENTY_FOUR_SEVEN || !STAY_VC_CHANNEL_ID) return;
   for (const guild of client.guilds.cache.values()) {
+    const state = getState(guild.id);
+    if (TWENTY_FOUR_SEVEN && STAY_VC_CHANNEL_ID) {
+      state.auto247 = true;
+      state.auto247ChannelId = STAY_VC_CHANNEL_ID;
+    }
     await ensure24x7Guild(guild.id);
   }
 }
@@ -568,7 +637,7 @@ client.on("interactionCreate", async interaction => {
       if (action === "pause") state.player.pause();
       else if (action === "resume") state.player.unpause();
       else if (action === "skip") state.player.stop();
-      else if (action === "stop") { state.items = []; state.current = null; state.generation++; state.player.stop(true); }
+      else if (action === "stop") { if (state.current?.file) fs.rmSync(state.current.file, { force: true }); state.items = []; state.current = null; state.generation++; state.player.stop(true); }
       else if (action === "queue") {
         const lines = [];
         if (state.current) lines.push(`▶️ **Now:** ${state.current.title}`);
@@ -596,6 +665,10 @@ client.on("interactionCreate", async interaction => {
       args.percent = interaction.options.getInteger("percent", true);
     } else if (interaction.commandName === "prefix") {
       args.prefix = interaction.options.getString("prefix", true);
+    } else if (interaction.commandName === "247") {
+      args.enabled = interaction.options.getBoolean("enabled", true);
+      const channel = interaction.options.getChannel("channel");
+      args.channelId = channel?.id || null;
     }
 
     await handleAction(interaction.commandName, interaction.guildId, interaction.member, args, payload =>
@@ -647,6 +720,15 @@ client.on("messageCreate", async message => {
       const n = Number(parts[0]);
       if (!Number.isInteger(n) || n < 1 || n > 100) throw new Error(`Usage: \`${prefix}volume 80\``);
       return handleAction("volume", message.guild.id, message.member, { percent: n }, p => message.reply(p));
+    }
+
+    if (cmd === "247") {
+      const mode = (parts[0] || "").toLowerCase();
+      if (!mode || !["on", "off"].includes(mode)) throw new Error(`Usage: \`${prefix}247 on [voice-channel-id]\` or \`${prefix}247 off\``);
+      return handleAction("247", message.guild.id, message.member, {
+        enabled: mode === "on",
+        channelId: parts[1] || null
+      }, p => message.reply(p));
     }
 
     if (cmd === "prefix") {
