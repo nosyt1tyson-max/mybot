@@ -1,6 +1,6 @@
 {
   "name": "indian-discord-tts-music-bot",
-  "version": "13.0.0",
+  "version": "14.0.0",
   "description": "Professional Indian TTS and music Discord bot for Railway",
   "main": "index.js",
   "type": "commonjs",
@@ -15,6 +15,6 @@
     "@discordjs/voice": "^0.19.0",
     "discord.js": "^14.22.1",
     "dotenv": "^17.2.1",
-    "jiosaavn-api-client": "^2.0.0"
+    "crypto-js": "^4.2.0"
   }
 }
