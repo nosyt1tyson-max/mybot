@@ -1,9 +1,0 @@
-V11 FINAL MUSIC ARCHITECTURE
-- Removed YouTube/yt-dlp from the actual music playback path.
-- Search uses JioSaavn-compatible API endpoints.
-- Direct audio CDN URL is downloaded to a temporary MP3.
-- Discord AudioPlayer receives the local audio file.
-- NOW PLAYING is shown only after the audio resource is submitted.
-- TTS/Hinglish attribution remains intact.
-- 24/7 command and Railway environment mode remain included.
-- ffmpeg is installed for Discord audio handling.
