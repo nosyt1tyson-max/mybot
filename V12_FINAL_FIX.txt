@@ -1,0 +1,6 @@
+V12 FINAL FIX
+- Railway Docker build now installs build-essential (make/g++) so @discordjs/opus can compile on Node 24.
+- Keeps Indian Hindi/English TTS, Hinglish, !t and /tts.
+- Keeps real music playback and professional controls.
+- Keeps 24/7 reconnect.
+- Music playback does not use the previous YouTube/yt-dlp path.
