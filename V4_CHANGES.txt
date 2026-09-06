@@ -1,5 +1,0 @@
-V4 changes
-1. Prevent duplicate "Name said: Name said:" attribution.
-2. Better Roman-Hindi/Hinglish -> Hindi TTS normalization.
-3. Softer natural Indian female TTS voice remains enabled.
-4. Professional music/TTS branding retained.
