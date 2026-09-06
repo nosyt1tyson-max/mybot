@@ -1,63 +1,24 @@
-# 🇮🇳 Indian TTS + Music Bot — Railway V9
+# Indian Discord TTS + Music Bot — V11 FINAL
 
-Professional Discord bot with:
-- Hindi + Indian English neural TTS
-- `!t <text>` TTS with server display-name attribution
-- Hinglish normalization
-- YouTube music search/playback
-- Pause / Resume / Skip / Stop / Queue buttons
-- Real playback status: PREPARING → NOW PLAYING, or MUSIC FAILED with the actual error
-- Current yt-dlp EJS support
-- bgutil PO-token provider support for modern YouTube restrictions
-- HLS/m3u8 preference for the current `web_safari` client path
-- 24/7 voice reconnect mode
-- Railway Docker deployment
+## What changed
+The previous YouTube/yt-dlp playback path has been removed from the music path. The bot now searches JioSaavn-compatible sources, gets a direct audio CDN URL, downloads the audio locally, and gives the file to Discord voice. This avoids the Railway YouTube bot-check that was breaking playback.
 
-## Railway Variables
-
-Required:
-- `DISCORD_TOKEN`
-
-Optional:
-- `GUILD_ID`
-- `DEFAULT_PREFIX=!`
-- `BOT_STATUS=🇮🇳 Indian Voice • Music`
-- `TWENTY_FOUR_SEVEN=false`
-- `STAY_VC_CHANNEL_ID=`
-- `YTDLP_POT_URL=http://127.0.0.1:4416`
+JioSaavn's public/unofficial API ecosystem documents search-by-song-name and returned download links; the exact upstream API can change, so the bot includes a second API fallback.
 
 ## Commands
+- `!play <song>` — search and play music
+- `!t <text>` — Indian Hindi/English TTS
+- `!247 on <voice-channel-id>` / `!247 off` — 24/7 voice
+- `/play`, `/tts`, `/247`, `/pause`, `/resume`, `/skip`, `/stop`, `/queue`, `/volume`
 
-Slash:
-- `/play`
-- `/pause`
-- `/resume`
-- `/skip`
-- `/stop`
-- `/queue`
-- `/volume`
-- `/join`
-- `/leave`
-- `/tts`
-- `/247`
-- `/prefix`
+## Railway variables
+- `DISCORD_TOKEN` — required
+- `DEFAULT_PREFIX=!`
+- `TWENTY_FOUR_SEVEN=true` — automatically reconnect after Railway restart
+- `STAY_VC_CHANNEL_ID=<voice channel id>` — voice channel for 24/7
 
-Prefix (default `!`):
-- `!play <song>`
-- `!pause`, `!resume`, `!skip`, `!stop`, `!queue`
-- `!t <text>`
-- `!join`, `!leave`
-- `!247 on` / `!247 off`
-- `!help`
+## Music behavior
+The bot shows `PREPARING` first. It only changes to `NOW PLAYING` after the audio file has actually been downloaded and submitted to the Discord AudioPlayer.
 
-## 24/7
-
-Set:
-`TWENTY_FOUR_SEVEN=true`
-`STAY_VC_CHANNEL_ID=YOUR_VOICE_CHANNEL_ID`
-
-Then redeploy. The bot will join that voice channel and reconnect after a disconnect.
-
-## Important YouTube note
-
-YouTube changes anti-bot and Proof-of-Origin requirements over time. This version uses current yt-dlp/EJS support, the bgutil PO-token provider, and a `web_safari` HLS-first extraction path. No third-party bot can guarantee that every YouTube video will always be playable if YouTube blocks a particular source/IP.
+## Important
+The music source is an unofficial JioSaavn integration, not an official JioSaavn developer API. Upstream availability can change. No third-party service can honestly guarantee 100% uptime forever.

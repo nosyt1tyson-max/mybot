@@ -27,6 +27,7 @@ const {
 } = require("@discordjs/voice");
 
 const { spawn, execFile } = require("node:child_process");
+const { Readable } = require("node:stream");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
@@ -228,61 +229,103 @@ function exec(command, args, timeout = 120000) {
   });
 }
 
-const YT_CLIENTS = ["web_safari", "web_embedded", "tv", "android_vr", "mweb"];
-const POT_URL = process.env.YTDLP_POT_URL || "http://127.0.0.1:4416";
+const MUSIC_APIS = [
+  "https://saavn.dev/api/search/songs",
+  "https://saavnapi-nine.vercel.app/result"
+];
 
-async function ytExec(args, timeout = 120000) {
-  const common = [
-    "--no-playlist",
-    "--no-warnings",
-    "--js-runtimes", "node",
-    "--remote-components", "ejs:github",
-    "--extractor-args", `youtubepot-bgutilhttp:base_url=${POT_URL}`
-  ];
-  let lastError;
-  for (const client of YT_CLIENTS) {
+async function fetchJson(url, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Indian-Discord-Music-Bot/11.0" }
+    });
+    if (!r.ok) throw new Error(`Music API HTTP ${r.status}`);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function pickSaavnSong(data) {
+  const results = data?.data?.results || data?.results || data?.data || [];
+  const list = Array.isArray(results) ? results : [];
+  if (!list.length) return null;
+  const s = list[0];
+  const downloads = Array.isArray(s.downloadUrl) ? s.downloadUrl : [];
+  const best = [...downloads].reverse().find(x => x?.url);
+  const artist = s.artists?.primary?.map(a => a.name).join(", ") || s.primaryArtists || s.artist || "Unknown Artist";
+  return {
+    title: s.name || s.title || "Unknown",
+    artist,
+    duration: Number(s.duration || 0),
+    image: s.image?.at?.(-1)?.url || s.image_url || s.image || null,
+    audioUrl: best?.url || (typeof s.url === "string" && /\.(mp3|m4a|aac|mp4)(\?|$)/i.test(s.url) ? s.url : null),
+    webpageUrl: s.url || s.perma_url || null,
+    source: "JioSaavn"
+  };
+}
+
+async function searchSaavn(query) {
+  const encoded = encodeURIComponent(query);
+  let last;
+  for (const base of MUSIC_APIS) {
     try {
-      return await exec("yt-dlp", [
-        ...common,
-        "--extractor-args", `youtube:player_client=${client}`,
-        ...args
-      ], timeout);
+      const separator = base.includes("?") ? "&" : "?";
+      const key = base.includes("saavn.dev") ? "query" : "query";
+      const data = await fetchJson(`${base}${separator}${key}=${encoded}`);
+      const song = pickSaavnSong(data);
+      if (song?.audioUrl) return song;
     } catch (e) {
-      lastError = e;
-      console.error(`⚠️ yt-dlp ${client} failed: ${(e.stderr || e.message || "").toString().slice(-1200)}`);
+      last = e;
+      console.error(`⚠️ Music API failed (${base}):`, e.message);
     }
   }
-  throw lastError || new Error("YouTube extraction failed.");
+  throw last || new Error("No playable result was found.");
+}
+
+async function downloadRemoteAudio(url, title) {
+  if (!/^https?:\/\//i.test(url)) throw new Error("Invalid audio URL.");
+  const safe = String(title || "track").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 70) || "track";
+  const file = path.join(os.tmpdir(), `discord-music-${crypto.randomUUID()}-${safe}.mp3`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180000);
+  try {
+    const r = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+        "Accept": "audio/mpeg,audio/*;q=0.9,*/*;q=0.8"
+      }
+    });
+    if (!r.ok || !r.body) throw new Error(`Audio CDN HTTP ${r.status}`);
+    const fh = fs.createWriteStream(file);
+    await new Promise((resolve, reject) => {
+      fh.on("error", reject);
+      fh.on("finish", resolve);
+      Readable.fromWeb(r.body).on("error", reject).pipe(fh);
+    });
+    if (!fs.existsSync(file) || fs.statSync(file).size < 10000) {
+      throw new Error("Music CDN returned an empty/invalid audio file.");
+    }
+    return file;
+  } catch (e) {
+    fs.rmSync(file, { force: true });
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function mediaInfo(query) {
-  const target = /^https?:\/\//i.test(query) ? query : `ytsearch1:${query}`;
-  const out = await ytExec(["--dump-single-json", "--skip-download", target]);
-  const data = JSON.parse(out);
-  return data.entries?.[0] || data;
+  const song = await searchSaavn(query);
+  return song;
 }
 
-async function downloadAudio(webpageUrl, title) {
-  const safe = String(title || "track").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 70) || "track";
-  const base = path.join(os.tmpdir(), `discord-music-${crypto.randomUUID()}-${safe}`);
-  const output = `${base}.%(ext)s`;
-  const out = await ytExec([
-    "--format", "bestaudio[protocol^=m3u8]/bestaudio/best",
-    "--extract-audio",
-    "--audio-format", "mp3",
-    "--audio-quality", "0",
-    "--output", output,
-    webpageUrl
-  ], 240000);
-
-  const candidates = [
-    `${base}.mp3`,
-    ...fs.readdirSync(os.tmpdir()).filter(f => f.startsWith(path.basename(base) + "."))
-      .map(f => path.join(os.tmpdir(), f))
-  ];
-  const file = candidates.find(f => fs.existsSync(f) && fs.statSync(f).size > 10000);
-  if (!file) throw new Error(`Audio file was not created. ${out.slice(-500)}`);
-  return file;
+async function downloadAudio(song) {
+  return downloadRemoteAudio(song.audioUrl, song.title);
 }
 
 async function playNext(guildId, statusMessage = null, requestedTitle = null) {
@@ -294,8 +337,8 @@ async function playNext(guildId, statusMessage = null, requestedTitle = null) {
   const generation = state.generation;
 
   try {
-    console.log(`🎵 Preparing: ${item.title}`);
-    const file = await downloadAudio(item.webpage_url, item.title);
+    console.log(`🎵 Preparing JioSaavn audio: ${item.title}`);
+    const file = await downloadAudio(item);
     if (generation !== state.generation) {
       fs.rmSync(file, { force: true });
       state.current = null;
@@ -306,27 +349,28 @@ async function playNext(guildId, statusMessage = null, requestedTitle = null) {
     const resource = createAudioResource(file, { inlineVolume: true, inputType: StreamType.Arbitrary });
     resource.volume.setVolume(state.volume / 100);
     state.player.play(resource);
-    console.log(`▶️ Music resource submitted to Discord AudioPlayer: ${item.title}`);
-    console.log(`🔊 AudioPlayer status: ${state.player.state.status}`);
+    console.log(`▶️ REAL MUSIC STARTED: ${item.title} | file=${file}`);
+
     if (statusMessage) {
       await statusMessage.edit({
-        embeds: [embed("🎵 NOW PLAYING • MUSIC", `**${item.title}**\n\n🔊 **Audio stream connected successfully.**\n🎧 Playing in the voice channel now.`)],
+        embeds: [embed("🎵 NOW PLAYING • MUSIC", `**${item.title}**\n👤 **${item.artist || "Unknown Artist"}**\n\n🔊 **Source:** JioSaavn\n▶️ **Audio has been submitted to Discord VC.**`)],
         components: [musicButtons(guildId)]
       }).catch(() => {});
     }
   } catch (e) {
-    console.error("❌ Music stream failed:", e.stack || e.message);
+    console.error("❌ Music playback failed:", e.stack || e.message);
     state.current = null;
     if (statusMessage) {
-      const raw = String(e.message || e).replace(/\s+/g, " ").slice(0, 1200);
+      const raw = String(e.message || e).replace(/\s+/g, " ").slice(0, 1000);
       await statusMessage.edit({
-        embeds: [embed("❌ MUSIC FAILED • REAL ERROR", `**${requestedTitle || item.title}**\n\n${raw}\n\nYouTube extraction failed before audio reached Discord. Check Railway logs for the full yt-dlp error.`)],
+        embeds: [embed("❌ MUSIC FAILED", `**${requestedTitle || item.title}**\n\n${raw}\n\nI did not mark this as Now Playing because audio was not downloaded successfully.`)],
         components: []
       }).catch(() => {});
     }
     if (state.items.length) setTimeout(() => playNext(guildId), 500);
   }
 }
+
 function cleanText(text) {
   return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
 }
@@ -422,6 +466,7 @@ async function commandHelp(target) {
 \`${p}help\`
 \`${p}247 on/off\` — 24/7 voice (Manage Server)
 
+**Music:** JioSaavn search + direct audio CDN
 **Indian voices:** Hindi India + English India`);
   return e;
 }
@@ -467,17 +512,20 @@ async function handleAction(name, guildId, member, args, reply) {
     const query = args.query;
     connect({ member, guildId });
     const info = await mediaInfo(query);
-    const url = info.webpage_url || info.original_url;
-    if (!url) throw new Error("Could not find that song.");
+    if (!info.audioUrl) throw new Error("Could not find a playable audio stream.");
 
     state.items.push({
       title: info.title || "Unknown",
-      webpage_url: url,
-      duration: info.duration || 0
+      audioUrl: info.audioUrl,
+      webpageUrl: info.webpageUrl,
+      artist: info.artist,
+      duration: info.duration || 0,
+      image: info.image,
+      source: info.source
     });
 
     const position = state.items.length + (state.current ? 1 : 0);
-    const msg = await reply({ embeds: [embed("⏳ PREPARING • MUSIC", `**${info.title || "Unknown"}**\n\nDownloading and preparing the audio stream…\nIf YouTube blocks the source, I will show the real error instead of pretending the song is playing.`)], components: [musicButtons(guildId)] });
+    const msg = await reply({ embeds: [embed("⏳ PREPARING • MUSIC", `**${info.title || "Unknown"}**\n\nDownloading the audio from the music source…\nI will only show **Now Playing** after the audio file is actually ready.`)], components: [musicButtons(guildId)] });
     playNext(guildId, msg, info.title || "Unknown").catch(err => console.error("playNext:", err));
     return msg;
   }
