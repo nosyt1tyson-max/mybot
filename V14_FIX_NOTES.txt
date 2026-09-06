@@ -1,7 +1,0 @@
-V14 MUSIC FIX
-- Removed jiosaavn-api-client because Node 24 was trying to execute its index.ts inside node_modules and failing with ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING.
-- Uses JioSaavn's native API directly with fetch.
-- Decrypts the returned encrypted media URL with DES-ECB using the documented JioSaavn key.
-- Uses FFmpeg to decode the downloaded audio into Discord-compatible 48 kHz stereo PCM.
-- NOW PLAYING is shown only after FFmpeg has produced actual audio bytes.
-- Preserves Indian Hindi/English TTS, Hinglish, attribution, professional buttons, queue, and 24/7 reconnect.
