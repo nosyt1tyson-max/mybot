@@ -228,7 +228,7 @@ function exec(command, args, timeout = 120000) {
   });
 }
 
-const YT_CLIENTS = ["mweb", "tv", "android_vr", "web_embedded"];
+const YT_CLIENTS = ["web_safari", "web_embedded", "tv", "android_vr", "mweb"];
 const POT_URL = process.env.YTDLP_POT_URL || "http://127.0.0.1:4416";
 
 async function ytExec(args, timeout = 120000) {
@@ -267,7 +267,7 @@ async function downloadAudio(webpageUrl, title) {
   const base = path.join(os.tmpdir(), `discord-music-${crypto.randomUUID()}-${safe}`);
   const output = `${base}.%(ext)s`;
   const out = await ytExec([
-    "--format", "bestaudio/best",
+    "--format", "bestaudio[protocol^=m3u8]/bestaudio/best",
     "--extract-audio",
     "--audio-format", "mp3",
     "--audio-quality", "0",
@@ -285,7 +285,7 @@ async function downloadAudio(webpageUrl, title) {
   return file;
 }
 
-async function playNext(guildId) {
+async function playNext(guildId, statusMessage = null, requestedTitle = null) {
   const state = getState(guildId);
   if (state.current || !state.items.length) return;
 
@@ -303,14 +303,28 @@ async function playNext(guildId) {
     }
 
     item.file = file;
-    const resource = createAudioResource(file, { inlineVolume: true });
+    const resource = createAudioResource(file, { inlineVolume: true, inputType: StreamType.Arbitrary });
     resource.volume.setVolume(state.volume / 100);
     state.player.play(resource);
-    console.log(`▶️ Music playing: ${item.title}`);
+    console.log(`▶️ Music resource submitted to Discord AudioPlayer: ${item.title}`);
+    console.log(`🔊 AudioPlayer status: ${state.player.state.status}`);
+    if (statusMessage) {
+      await statusMessage.edit({
+        embeds: [embed("🎵 NOW PLAYING • MUSIC", `**${item.title}**\n\n🔊 **Audio stream connected successfully.**\n🎧 Playing in the voice channel now.`)],
+        components: [musicButtons(guildId)]
+      }).catch(() => {});
+    }
   } catch (e) {
-    console.error("❌ Music stream failed:", e.message);
+    console.error("❌ Music stream failed:", e.stack || e.message);
     state.current = null;
-    setTimeout(() => playNext(guildId), 500);
+    if (statusMessage) {
+      const raw = String(e.message || e).replace(/\s+/g, " ").slice(0, 1200);
+      await statusMessage.edit({
+        embeds: [embed("❌ MUSIC FAILED • REAL ERROR", `**${requestedTitle || item.title}**\n\n${raw}\n\nYouTube extraction failed before audio reached Discord. Check Railway logs for the full yt-dlp error.`)],
+        components: []
+      }).catch(() => {});
+    }
+    if (state.items.length) setTimeout(() => playNext(guildId), 500);
   }
 }
 function cleanText(text) {
@@ -424,10 +438,11 @@ async function handleAction(name, guildId, member, args, reply) {
 
   if (name === "leave") {
     state.items = [];
+    const oldCurrent = state.current;
     state.current = null;
     state.generation++;
     state.player.stop(true);
-    if (state.current?.file) fs.rmSync(state.current.file, { force: true });
+    if (oldCurrent?.file) fs.rmSync(oldCurrent.file, { force: true });
     const c = getVoiceConnection(guildId);
     if (c) c.destroy();
     state.connection = null;
@@ -462,9 +477,9 @@ async function handleAction(name, guildId, member, args, reply) {
     });
 
     const position = state.items.length + (state.current ? 1 : 0);
-    playNext(guildId).catch(console.error);
-
-    return reply({ embeds: [embed("🎵 NOW PLAYING • MUSIC", `**${info.title || "Unknown"}**\nQueue position: **${position}**\n\nUse the controls below for quick playback.`)], components: [musicButtons(guildId)] });
+    const msg = await reply({ embeds: [embed("⏳ PREPARING • MUSIC", `**${info.title || "Unknown"}**\n\nDownloading and preparing the audio stream…\nIf YouTube blocks the source, I will show the real error instead of pretending the song is playing.`)], components: [musicButtons(guildId)] });
+    playNext(guildId, msg, info.title || "Unknown").catch(err => console.error("playNext:", err));
+    return msg;
   }
 
   if (name === "pause") {
@@ -484,10 +499,11 @@ async function handleAction(name, guildId, member, args, reply) {
 
   if (name === "stop") {
     state.items = [];
+    const oldCurrent = state.current;
     state.current = null;
     state.generation++;
     state.player.stop(true);
-    if (state.current?.file) fs.rmSync(state.current.file, { force: true });
+    if (oldCurrent?.file) fs.rmSync(oldCurrent.file, { force: true });
     return reply({ embeds: [embed("⏹️ Stopped", "Music stopped and queue cleared.")] });
   }
 
